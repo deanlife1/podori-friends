@@ -55,66 +55,74 @@ for img in bpy.data.images:
 
 
 # ---- 그림 투영 베이크: 앞·뒤·좌·우 그림을 법선 방향에 따라 섞어 UV 텍스처로 굽는다 ----
-bounds = json.load(open(os.path.join(views, 'bounds.json')))
-mesh = obj.data
-mx = max(abs(v.co.x) for v in mesh.vertices); my0 = min(v.co.y for v in mesh.vertices); my1 = max(v.co.y for v in mesh.vertices)
-bpy.ops.object.mode_set(mode='EDIT'); bpy.ops.mesh.select_all(action='SELECT')
-bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.02); bpy.ops.object.mode_set(mode='OBJECT')
-mat = bpy.data.materials.new('Proj'); mat.use_nodes = True; nt = mat.node_tree; nodes, links = nt.nodes, nt.links
-nodes.clear()
-out = nodes.new('ShaderNodeOutputMaterial'); bsdf = nodes.new('ShaderNodeBsdfPrincipled'); links.new(bsdf.outputs[0], out.inputs[0])
-bsdf.inputs['Roughness'].default_value = 1.0
-tc = nodes.new('ShaderNodeTexCoord'); sep = nodes.new('ShaderNodeSeparateXYZ'); links.new(tc.outputs['Object'], sep.inputs[0])
-geo = nodes.new('ShaderNodeNewGeometry'); nsep = nodes.new('ShaderNodeSeparateXYZ'); links.new(geo.outputs['Normal'], nsep.inputs[0])
-def mathn(op, a, b=None, val=None):
-    n = nodes.new('ShaderNodeMath'); n.operation = op
-    if isinstance(a, (int, float)): n.inputs[0].default_value = a
-    else: links.new(a, n.inputs[0])
-    if b is not None:
-        if isinstance(b, (int, float)): n.inputs[1].default_value = b
-        else: links.new(b, n.inputs[1])
-    return n.outputs[0]
-def maprange(sock, a, b, c, d):
-    # 월드 [a,b] -> 이미지 [c,d]
-    return mathn('ADD', mathn('MULTIPLY', mathn('SUBTRACT', sock, a), (d - c) / (b - a)), c)
-def tex_node(path, u, v):
-    img = bpy.data.images.load(path); t = nodes.new('ShaderNodeTexImage'); t.image = img; t.extension = 'EXTEND'
-    comb = nodes.new('ShaderNodeCombineXYZ'); links.new(u, comb.inputs[0]); links.new(v, comb.inputs[1]); links.new(comb.outputs[0], t.inputs[0])
-    return t.outputs['Color']
-X, Y, Z = sep.outputs[0], sep.outputs[1], sep.outputs[2]
-NX, NY = nsep.outputs[0], nsep.outputs[1]
-def vmap(key): b = bounds[key]; return maprange(Z, 0.0, 1.0, 1 - b[3], 1 - b[1])
-bf = bounds[f'{name}_front']; bb = bounds[f'{name}_back']; bs = bounds[f'{name}_side']; br = bounds[f'{name}_side_r']
-cF = tex_node(os.path.join(views, f'{name}_front_fill.png'), maprange(X, -mx, mx, bf[0], bf[2]), vmap(f'{name}_front'))
-cB = tex_node(os.path.join(views, f'{name}_back_fill.png'), maprange(X, mx, -mx, bb[0], bb[2]), vmap(f'{name}_back'))
-cL = tex_node(os.path.join(views, f'{name}_side_fill.png'), maprange(Y, my0, my1, bs[0], bs[2]), vmap(f'{name}_side'))
-cR = tex_node(os.path.join(views, f'{name}_side_r_fill.png'), maprange(Y, my1, my0, br[0], br[2]), vmap(f'{name}_side_r'))
-P = 3.0
-wF = mathn('POWER', mathn('MAXIMUM', mathn('MULTIPLY', NY, -1.0), 0.0), P)
-wB = mathn('POWER', mathn('MAXIMUM', NY, 0.0), P)
-wL = mathn('POWER', mathn('MAXIMUM', mathn('MULTIPLY', NX, -1.0), 0.0), P)
-wR = mathn('POWER', mathn('MAXIMUM', NX, 0.0), P)
-wsum = mathn('ADD', mathn('ADD', wF, wB), mathn('ADD', mathn('ADD', wL, wR), 1e-4))
-def mixc(a, b, fac):
-    m = nodes.new('ShaderNodeMix'); m.data_type = 'RGBA'; links.new(fac, m.inputs['Factor']); links.new(a, m.inputs[6]); links.new(b, m.inputs[7]); return m.outputs[2]
-# 가중 평균을 순차 혼합으로: ((F*wF + B*wB)/(wF+wB) ...) 대신 누적 비율 혼합
-acc = cF; accw = wF
-for c, w in ((cB, wB), (cL, wL), (cR, wR)):
-    neww = mathn('ADD', accw, w); acc = mixc(acc, c, mathn('DIVIDE', w, mathn('ADD', neww, 1e-4))); accw = neww
-links.new(acc, bsdf.inputs['Base Color'])
-bake_img = bpy.data.images.new('Baked_' + name, 1024, 1024); bn = nodes.new('ShaderNodeTexImage'); bn.image = bake_img; nodes.active = bn
-mesh.materials.clear(); mesh.materials.append(mat)
-scene = bpy.context.scene; scene.render.engine = 'CYCLES'; scene.cycles.device = 'CPU'; scene.cycles.samples = 8
-scene.render.bake.use_pass_direct = False; scene.render.bake.use_pass_indirect = False; scene.render.bake.use_pass_color = True
-bpy.ops.object.select_all(action='DESELECT'); obj.select_set(True); bpy.context.view_layer.objects.active = obj
-bpy.ops.object.bake(type='DIFFUSE', margin=12)
-bake_img.filepath_raw = os.path.join(prev, 'baked.png'); bake_img.file_format = 'PNG'; bake_img.save()
-# 최종 재질: 구운 텍스처만 사용
-final = bpy.data.materials.new('Fur'); final.use_nodes = True; fn = final.node_tree.nodes; fl = final.node_tree.links
-fb = fn['Principled BSDF']; fb.inputs['Roughness'].default_value = 0.9
-ft = fn.new('ShaderNodeTexImage'); ft.image = bake_img; fl.new(ft.outputs['Color'], fb.inputs['Base Color'])
-mesh.materials.clear(); mesh.materials.append(final)
-print('baked')
+# (모델에 이미 텍스처가 있고 views 인자가 'keep'이면 건너뛴다)
+if views != 'keep':
+    bounds = json.load(open(os.path.join(views, 'bounds.json')))
+    mesh = obj.data
+    mx = max(abs(v.co.x) for v in mesh.vertices); my0 = min(v.co.y for v in mesh.vertices); my1 = max(v.co.y for v in mesh.vertices)
+    suffix = '_fill.png'
+    if os.path.exists(os.path.join(views, f'{name}_front_warp.png')):
+        # 변형본은 실루엣 렌더와 같은 직교 프레임(x,y∈[-0.65,0.65], z∈[-0.15,1.15])에 그려져 있다
+        suffix = '_warp.png'; mx = 0.65; my0 = -0.65; my1 = 0.65
+        for k in ('front', 'back', 'side', 'side_r'): bounds[f'{name}_{k}'] = [0.0, 0.15 / 1.3, 1.0, 1.15 / 1.3]
+        print('using warped views')
+    bpy.ops.object.mode_set(mode='EDIT'); bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.02); bpy.ops.object.mode_set(mode='OBJECT')
+    mat = bpy.data.materials.new('Proj'); mat.use_nodes = True; nt = mat.node_tree; nodes, links = nt.nodes, nt.links
+    nodes.clear()
+    out = nodes.new('ShaderNodeOutputMaterial'); bsdf = nodes.new('ShaderNodeBsdfPrincipled'); links.new(bsdf.outputs[0], out.inputs[0])
+    bsdf.inputs['Roughness'].default_value = 1.0
+    tc = nodes.new('ShaderNodeTexCoord'); sep = nodes.new('ShaderNodeSeparateXYZ'); links.new(tc.outputs['Object'], sep.inputs[0])
+    geo = nodes.new('ShaderNodeNewGeometry'); nsep = nodes.new('ShaderNodeSeparateXYZ'); links.new(geo.outputs['Normal'], nsep.inputs[0])
+    def mathn(op, a, b=None, val=None):
+        n = nodes.new('ShaderNodeMath'); n.operation = op
+        if isinstance(a, (int, float)): n.inputs[0].default_value = a
+        else: links.new(a, n.inputs[0])
+        if b is not None:
+            if isinstance(b, (int, float)): n.inputs[1].default_value = b
+            else: links.new(b, n.inputs[1])
+        return n.outputs[0]
+    def maprange(sock, a, b, c, d):
+        # 월드 [a,b] -> 이미지 [c,d]
+        return mathn('ADD', mathn('MULTIPLY', mathn('SUBTRACT', sock, a), (d - c) / (b - a)), c)
+    def tex_node(path, u, v):
+        img = bpy.data.images.load(path); t = nodes.new('ShaderNodeTexImage'); t.image = img; t.extension = 'EXTEND'
+        comb = nodes.new('ShaderNodeCombineXYZ'); links.new(u, comb.inputs[0]); links.new(v, comb.inputs[1]); links.new(comb.outputs[0], t.inputs[0])
+        return t.outputs['Color']
+    X, Y, Z = sep.outputs[0], sep.outputs[1], sep.outputs[2]
+    NX, NY = nsep.outputs[0], nsep.outputs[1]
+    def vmap(key): b = bounds[key]; return maprange(Z, 0.0, 1.0, 1 - b[3], 1 - b[1])
+    bf = bounds[f'{name}_front']; bb = bounds[f'{name}_back']; bs = bounds[f'{name}_side']; br = bounds[f'{name}_side_r']
+    cF = tex_node(os.path.join(views, f'{name}_front' + suffix), maprange(X, -mx, mx, bf[0], bf[2]), vmap(f'{name}_front'))
+    cB = tex_node(os.path.join(views, f'{name}_back' + suffix), maprange(X, mx, -mx, bb[0], bb[2]), vmap(f'{name}_back'))
+    cL = tex_node(os.path.join(views, f'{name}_side' + suffix), maprange(Y, my0, my1, bs[0], bs[2]), vmap(f'{name}_side'))
+    cR = tex_node(os.path.join(views, f'{name}_side_r' + suffix), maprange(Y, my1, my0, br[0], br[2]), vmap(f'{name}_side_r'))
+    P = 5.0
+    wF = mathn('POWER', mathn('MAXIMUM', mathn('MULTIPLY', NY, -1.0), 0.0), P)
+    wB = mathn('POWER', mathn('MAXIMUM', NY, 0.0), P)
+    wL = mathn('POWER', mathn('MAXIMUM', mathn('MULTIPLY', NX, -1.0), 0.0), P)
+    wR = mathn('POWER', mathn('MAXIMUM', NX, 0.0), P)
+    wsum = mathn('ADD', mathn('ADD', wF, wB), mathn('ADD', mathn('ADD', wL, wR), 1e-4))
+    def mixc(a, b, fac):
+        m = nodes.new('ShaderNodeMix'); m.data_type = 'RGBA'; links.new(fac, m.inputs['Factor']); links.new(a, m.inputs[6]); links.new(b, m.inputs[7]); return m.outputs[2]
+    # 가중 평균을 순차 혼합으로: ((F*wF + B*wB)/(wF+wB) ...) 대신 누적 비율 혼합
+    acc = cF; accw = wF
+    for c, w in ((cB, wB), (cL, wL), (cR, wR)):
+        neww = mathn('ADD', accw, w); acc = mixc(acc, c, mathn('DIVIDE', w, mathn('ADD', neww, 1e-4))); accw = neww
+    links.new(acc, bsdf.inputs['Base Color'])
+    bake_img = bpy.data.images.new('Baked_' + name, 1024, 1024); bn = nodes.new('ShaderNodeTexImage'); bn.image = bake_img; nodes.active = bn
+    mesh.materials.clear(); mesh.materials.append(mat)
+    scene = bpy.context.scene; scene.render.engine = 'CYCLES'; scene.cycles.device = 'CPU'; scene.cycles.samples = 8
+    scene.render.bake.use_pass_direct = False; scene.render.bake.use_pass_indirect = False; scene.render.bake.use_pass_color = True
+    bpy.ops.object.select_all(action='DESELECT'); obj.select_set(True); bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.bake(type='DIFFUSE', margin=12)
+    bake_img.filepath_raw = os.path.join(prev, 'baked.png'); bake_img.file_format = 'PNG'; bake_img.save()
+    # 최종 재질: 구운 텍스처만 사용
+    final = bpy.data.materials.new('Fur'); final.use_nodes = True; fn = final.node_tree.nodes; fl = final.node_tree.links
+    fb = fn['Principled BSDF']; fb.inputs['Roughness'].default_value = 0.9
+    ft = fn.new('ShaderNodeTexImage'); ft.image = bake_img; fl.new(ft.outputs['Color'], fb.inputs['Base Color'])
+    mesh.materials.clear(); mesh.materials.append(final)
+    print('baked')
 
 # ---- 뼈 위치 추정: 높이별 단면을 훑는다 ----
 vs = [v.co.copy() for v in obj.data.vertices]
@@ -151,19 +159,33 @@ print(dict(crotch=crotch, shoulder=shoulder, neck=neck, top=top, torso_half=tors
 
 # 귀: 머리 위쪽 바깥 덩어리
 head_half = width((neck + top) / 2) / 2
-ears = {}
-for sgn, nm in ((-1, 'L'), (1, 'R')):
-    ev = [v for v in vs if v.z > top - 0.14 and sgn * v.x > head_half * 0.5]
-    if len(ev) > 20:
-        c = sum((v for v in ev), Vector()) / len(ev)
-        ears[nm] = c
+ears = {}; ear_base = None
+gapped = [z for z in zs if z > neck + 0.05 and has_gap(z)]
+if gapped and top - min(gapped) > 0.12 and all(has_gap(z) for z in zs if z > min(gapped) + 0.02):
+    ear_base = min(gapped)
+    for sgn, nm in ((-1, 'L'), (1, 'R')):
+        ev = [v for v in vs if v.z > ear_base and sgn * v.x > 0]
+        c = sum((v for v in ev), Vector()) / len(ev); tipz = max(v.z for v in ev)
+        ears[nm] = (Vector((c.x, c.y, ear_base)), Vector((c.x, c.y, tipz)))
+    head_top = ear_base
+else:
+    head_top = top
+    for sgn, nm in ((-1, 'L'), (1, 'R')):
+        ev = [v for v in vs if v.z > top - 0.14 and sgn * v.x > head_half * 0.5]
+        if len(ev) > 20:
+            c = sum((v for v in ev), Vector()) / len(ev)
+            ears[nm] = (Vector((c.x, c.y, c.z - 0.06)), Vector((c.x, c.y, c.z + 0.06)))
 # 꼬리: 몸통 뒤(+y)로 빠져나온 덩어리
-body_back = max(v.y for v in slab(crotch, shoulder) if abs(v.x) < torso_half * 0.6)
-tail_v = [v for v in vs if v.y > body_back + 0.03 and v.z < shoulder + 0.1]
+# 몸통 뒤쪽 경계: 높이별 최대 y의 중앙값(꼬리가 있는 몇 단면에 끌려가지 않게)
+backs = sorted(max(v.y for v in slab(z - 0.02, z + 0.02) if abs(v.x) < torso_half * 0.6) for z in zs if crotch < z < shoulder and slab(z - 0.02, z + 0.02))
+body_back = backs[len(backs) // 4]  # 하위 25%: 꼬리가 붙은 단면에 끌려가지 않는 몸통 뒤 경계
+tail_v = [v for v in vs if v.y > body_back + 0.07 and 0.03 < v.z < shoulder + 0.15 and abs(v.x) < torso_half]
 tail_chain = []
-if len(tail_v) > 40:
-    tail_v.sort(key=lambda v: v.y)
-    n = 3
+if len(tail_v) > 30:
+    base = Vector((0, body_back, sum(v.z for v in tail_v) / len(tail_v)))
+    tail_v.sort(key=lambda v: (v - base).length)
+    span = (tail_v[-1] - base).length
+    n = 3 if span > 0.12 else 1
     for i in range(n):
         seg = tail_v[i * len(tail_v) // n:(i + 1) * len(tail_v) // n]
         tail_chain.append(sum((v for v in seg), Vector()) / len(seg))
@@ -184,15 +206,15 @@ yb = yc((crotch + shoulder) / 2)
 bone('Root', (0, 0, 0), (0, -0.1, 0))
 bone('Hips', (0, yb, crotch), (0, yb, crotch + (neck - crotch) * 0.45), 'Root')
 bone('Chest', (0, yb, crotch + (neck - crotch) * 0.45), (0, yb, neck), 'Hips', True)
-bone('Head', (0, yc((neck + top) / 2), neck), (0, yc((neck + top) / 2), top), 'Chest')
+bone('Head', (0, yc((neck + head_top) / 2), neck), (0, yc((neck + head_top) / 2), head_top), 'Chest')
 for sgn, nm in ((-1, 'L'), (1, 'R')):
     bone('UpperArm.' + nm, (sgn * torso_half * 0.85, yc(shoulder), shoulder), (sgn * arm_tip_x, yc(shoulder), arm_tip_z), 'Chest')
     bone('Thigh.' + nm, (sgn * leg_x, yc(crotch - 0.05), crotch + 0.01), (sgn * leg_x, yc(crotch - 0.05), 0.0), 'Hips')
     if nm in ears:
-        c = ears[nm]; bone('Ear.' + nm, (c.x, c.y, c.z - 0.06), (c.x, c.y, c.z + 0.06), 'Head')
+        h, t = ears[nm]; bone('Ear.' + nm, h, t, 'Head')
 prev_name = 'Hips'
 for i, c in enumerate(tail_chain):
-    start = Vector((0, body_back, crotch + 0.06)) if i == 0 else tail_chain[i - 1]
+    start = Vector((0, body_back - 0.02, tail_chain[0].z)) if i == 0 else tail_chain[i - 1]
     bone(f'Tail{i + 1}', start, c, prev_name, i > 0); prev_name = f'Tail{i + 1}'
 bpy.ops.object.mode_set(mode='OBJECT')
 

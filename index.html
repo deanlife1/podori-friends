@@ -2,7 +2,7 @@
 <html lang="ko">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>바람능선</title>
+<title>포돌이와 친구들</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@700&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
 <style>
@@ -57,7 +57,7 @@
 <div id="cross" hidden></div>
 
 <header id="brand" class="panel">
-  <h1>바람능선</h1>
+  <h1>포돌이와 친구들</h1>
   <p>끝없이 이어지는 산과 숲을 걸어 다니는 브라우저 오픈월드. 무료 도구만으로 HTML 파일 하나에 담았습니다.</p>
   <details>
     <summary>이렇게 만들었어요</summary>
@@ -70,8 +70,9 @@
       <li>풀: 플레이어 주변 3만 포기를 따라다니며 바람에 흔들림</li>
       <li>빛: 대기 산란 하늘 셰이더를 반사광으로도 사용, 그림자·안개·흐르는 구름</li>
       <li>후처리: 안티앨리어싱, 빛 번짐, 색보정, 비네팅, 필름 그레인</li>
-      <li>곰돌이·포돌이: 참고 그림 → Hunyuan3D(무료)로 모양 생성 → 그림을 앞·뒤·옆에서 투영해 텍스처 베이크 → 블렌더 스크립트로 뼈대 자동 삽입</li>
-      <li>동작: 걷기·점프·비행·손 흔들기를 뼈 회전으로 코드에서 계산</li>
+      <li>곰둥이·포돌이·토실이·란오리: 참고 그림 → Hunyuan3D(무료)로 모양 생성 → 그림을 앞·뒤·옆에서 투영해 텍스처 베이크 → 블렌더 스크립트로 뼈대 자동 삽입</li>
+      <li>털: 뼈대를 공유하는 껍질 10겹을 법선 방향으로 띄워 겹쳐 그리는 셸 퍼, 끝이 바람에 눕는다</li>
+      <li>동작: 뒤뚱걸음·깡충뛰기·종종걸음·점프·비행·손 흔들기·꼬리 살랑을 뼈 회전으로 코드에서 계산</li>
       <li>도구: Three.js r160, Blender 5.2, Hunyuan3D 2 (모두 무료)</li>
     </ul>
   </details>
@@ -84,7 +85,7 @@
   <label for="time">시각 <b id="timeLabel">15:30</b>
     <input id="time" type="range" min="4.5" max="20.5" step="0.05" value="15.5">
   </label>
-  <button id="view" type="button">시점: 곰돌이 뒤 (V)</button>
+  <button id="view" type="button">시점: 곰둥이 뒤 (V)</button>
   <button id="fly" type="button" aria-pressed="false">비행 모드 (F)</button>
 </aside>
 
@@ -95,7 +96,7 @@
 
 <div id="gate">
   <div class="card">
-    <h2>바람능선</h2>
+    <h2>포돌이와 친구들</h2>
     <p id="gateMsg">지형을 만드는 중입니다…</p>
     <div id="bar"><i></i></div>
     <button id="enter" type="button" disabled>들어가기</button>
@@ -589,12 +590,45 @@ class Joint {
 }
 const dummyJoint = () => ({ rotation: new THREE.Euler(), position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), apply() {} });
 const gltfLoader = new GLTFLoader();
-function loadCharacter(url, group, rig, names) {
+// 셸 퍼: 껍질을 법선 방향으로 uShell만큼 띄우고, 바깥 겹일수록 더 많이 뚫어서 털끝이 가늘어지게. 뿌리 쪽은 어둡게(자기 그림자).
+const FUR_SHELLS = 10, FUR_LEN = 0.022;
+function furMaterial(base, layer) {
+  const m = base.clone(); m.side = THREE.FrontSide; m.transparent = false; m.depthWrite = true;
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uLayer = { value: layer }; sh.uniforms.uFurLen = { value: FUR_LEN }; sh.uniforms.uTime = timeU;
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nuniform float uLayer, uFurLen, uTime;\nvarying vec3 vFurPos;')
+      .replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
+        vFurPos = position;
+        // 중력과 바람에 털끝이 살짝 눕는다
+        vec3 bend = vec3(sin(uTime * 1.7 + position.y * 9.0) * 0.25, -0.6, 0.0) * uLayer * uLayer;
+        transformed += (objectNormal + bend) * uFurLen * uLayer;`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
+        uniform float uLayer; varying vec3 vFurPos;
+        float furHash(vec3 p){ p = fract(p * 0.1031); p += dot(p, p.yzx + 33.33); return fract((p.x + p.y) * p.z); }`)
+      .replace('#include <map_fragment>', `#include <map_fragment>
+        vec3 fp = vFurPos * 420.0;
+        vec3 cell = floor(fp); vec2 off = fract(fp.xy) - 0.5;
+        float h = furHash(cell);
+        float r = length(off) * 2.0;
+        // 털 한 가닥: 셀 중심에서 반경이 겹(층)이 올라갈수록 가늘어지고, 길이가 짧은 셀은 일찍 끝난다
+        if (h < 0.35 || uLayer > h * 1.4 || r > 1.0 - uLayer * 0.85) discard;
+        diffuseColor.rgb *= mix(0.86, 1.1, uLayer);`);
+  };
+  m.customProgramCacheKey = () => 'fur' + layer.toFixed(2);
+  return m;
+}
+function loadCharacter(url, group, rig, names, tint) {
   group.updateMatrixWorld(true);
   gltfLoader.loadAsync(url).then((g) => {
     const model = g.scene;
-    model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; if (o.material) { o.material.roughness = 0.92; o.material.envMapIntensity = 0.6; } } });
+    const meshes = [];
+    model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; if (o.material) { o.material.roughness = 0.92; o.material.envMapIntensity = 0.6; if (tint) o.material.color.copy(tint); } meshes.push(o); } });
     rig.body.add(model);
+    // 털: 같은 뼈대를 공유하는 껍질을 겹쳐 그린다 (셸 퍼)
+    for (const o of meshes) for (let i = 1; i <= FUR_SHELLS; i++) {
+      const sh = o.clone(); sh.material = furMaterial(o.material, i / FUR_SHELLS); sh.castShadow = false; sh.receiveShadow = true; sh.frustumCulled = false;
+      o.parent.add(sh);
+    }
     model.updateMatrixWorld(true);
     const gq = group.getWorldQuaternion(new THREE.Quaternion()).invert();
     for (const [key, boneName] of Object.entries(names)) {
@@ -602,20 +636,31 @@ function loadCharacter(url, group, rig, names) {
       rig[key] = b ? new Joint(b, gq) : dummyJoint();
     }
     rig.joints = Object.values(rig).filter((j) => j && j.apply);
+    rig.tails = [rig.tail, rig.tail2, rig.tail3].filter((j) => j.bone);
     rig.loaded = true;
   }).catch((e) => console.warn('캐릭터 로드 실패', url, e));
 }
-const BONES = { hips: 'Hips', chest: 'Chest', head: 'Head', earL: 'Ear.L', earR: 'Ear.R', armL: 'UpperArm.L', armR: 'UpperArm.R', legL: 'Thigh.L', legR: 'Thigh.R' };
+// 머리 위 이름표 (캔버스 글자 → 스프라이트)
+function nameTag(text) {
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 80; const g = cv.getContext('2d');
+  g.font = '600 40px "IBM Plex Sans KR", "Apple SD Gothic Neo", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.lineWidth = 8; g.strokeStyle = 'rgba(20, 28, 20, 0.75)'; g.strokeText(text, 128, 42); g.fillStyle = '#fff6dc'; g.fillText(text, 128, 42);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: true }));
+  sp.scale.set(0.9, 0.28, 1); sp.position.y = 1.0 + 0.2 / 0.92; sp.renderOrder = 5; return sp;
+}
+const BONES = { hips: 'Hips', chest: 'Chest', head: 'Head', earL: 'Ear.L', earR: 'Ear.R', armL: 'UpperArm.L', armR: 'UpperArm.R', legL: 'Thigh.L', legR: 'Thigh.R', tail: 'Tail1', tail2: 'Tail2', tail3: 'Tail3' };
 function makeRig(group) {
-  const rig = { body: new THREE.Group(), joints: [], loaded: false };
+  const rig = { body: new THREE.Group(), joints: [], tails: [], loaded: false };
   group.add(rig.body);
   for (const k of Object.keys(BONES)) rig[k] = dummyJoint();
-  rig.tail = dummyJoint();
   return rig;
 }
 const bear = new THREE.Group(); bear.scale.setScalar(0.92); bear.rotation.order = 'YXZ'; scene.add(bear);
-const B = makeRig(bear); loadCharacter('models/bear.glb', bear, B, BONES);
-const bearState = { yaw: 0, phase: 0, tilt: 0 };
+bear.add(nameTag('곰둥이'));
+const B = makeRig(bear); loadCharacter('models/bear.glb', bear, B, BONES, new THREE.Color(1.3, 1.22, 1.08)); // 참고 그림의 밝은 황갈색에 맞춰 밝힘
+const bearState = { yaw: 0, phase: 0, tilt: 0, idle: 0 };
+const ARM_DROP = 1.15; // 팔을 어깨에서 아래로 내리는 각도(라디안)
 const angLerp = (a, b, t) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * t;
 function updateBear(dt, feetY, t) {
   bear.position.set(player.pos.x, feetY, player.pos.z);
@@ -632,8 +677,12 @@ function updateBear(dt, feetY, t) {
   // 다리·팔: 걸을 때는 반대로 흔들고, 공중에서는 웅크리고 팔을 들고, 비행 때는 팔을 앞으로 쭉
   const leg = air ? -0.6 : sw * amp * (0.6 + 0.35 * run);
   B.legL.rotation.x = player.fly ? 0.15 : leg; B.legR.rotation.x = player.fly ? 0.15 : (air ? -0.3 : -leg);
-  const arm = player.fly ? -2.7 : air ? -2.2 : -sw * amp * (0.7 + 0.5 * run);
+  const idleSway = Math.sin(t * 1.6) * 0.07;
+  const arm = player.fly ? -2.7 : air ? -2.2 : -sw * amp * (0.8 + 0.5 * run) + idleSway;
   B.armL.rotation.x = arm; B.armR.rotation.x = player.fly ? -2.7 : air ? -2.4 : -arm;
+  // 모델 기본 자세는 팔을 벌린 T자라, 평소엔 몸 옆으로 내리고 공중·비행 땐 조금 벌린다
+  const dropB = player.fly ? 0.55 : air ? 0.6 : ARM_DROP;
+  B.armL.rotation.z = dropB; B.armR.rotation.z = -dropB;
   // 뒤뚱뒤뚱: 몸을 좌우로 흔들고 살짝 튀어 오른다. 서 있을 땐 숨 쉬고 고개를 갸웃
   B.body.position.y = Math.abs(Math.cos(ph)) * 0.05 * amp;
   B.hips.rotation.z = sw * 0.09 * amp;
@@ -643,62 +692,118 @@ function updateBear(dt, feetY, t) {
   B.head.rotation.z = Math.sin(t * 0.7) * 0.1 * idle - sw * 0.05 * amp;
   B.head.rotation.x = -run * 0.15 + Math.sin(t * 1.3) * 0.03 * idle;
   B.earL.rotation.z = Math.sin(t * 9 + 1) * 0.06 * (amp + 0.2); B.earR.rotation.z = -Math.sin(t * 9) * 0.06 * (amp + 0.2);
-  B.tail.rotation.y = Math.sin(t * 6) * 0.25 * (0.3 + amp);
+  B.tail.rotation.y = Math.sin(t * 6) * 0.25 * (0.3 + amp); B.tail.rotation.x = Math.sin(ph * 2) * 0.2 * amp;
+  // 귀여움: 한동안 서 있으면 고개를 갸웃하다가 콩 하고 제자리 점프
+  bearState.idle = hs < 0.3 && player.onGround && !player.fly ? bearState.idle + dt : 0;
+  if (bearState.idle > 7) { player.vel.y = 4.5; player.onGround = false; bearState.idle = 3; }
+  B.head.rotation.y = Math.sin(t * 0.5) * 0.25 * smooth(2, 3, bearState.idle);
   for (const j of B.joints) j.apply();
 }
 
-// ---------- 포돌이: 곰돌이를 졸졸 따라다니는 아기 호랑이 ----------
-const tiger = new THREE.Group(); tiger.scale.setScalar(0.9); scene.add(tiger);
-const T = makeRig(tiger); loadCharacter('models/tiger.glb', tiger, T, BONES); T.tail = [];
-
-const tigerState = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, phase: 0, onGround: true, idle: 0, jumpIn: -1, init: false };
+// ---------- 친구들: 곰둥이를 졸졸 따라다니는 포돌이·토끼·오리 ----------
+// 걷는 방식이 셋 다 다르다: 포돌이는 뒤뚱뒤뚱, 토끼는 깡충깡충, 오리는 짧은 다리로 종종걸음
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _want = new THREE.Vector3();
-function updateTiger(dt, t) {
-  const st = tigerState, by = bearState.yaw;
+function makeFollower(url, scale, fwd, right, style, tint, name) {
+  const group = new THREE.Group(); group.scale.setScalar(scale); scene.add(group);
+  const tag = nameTag(name); tag.scale.multiplyScalar(1 / scale); tag.position.y = 1.0 + 0.2 / scale; group.add(tag); // 머리 위 20cm, 크기는 화면에서 같게
+  const rig = makeRig(group); loadCharacter(url, group, rig, BONES, tint);
+  return { group, rig, fwd, right, style, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, phase: 0, onGround: true, idle: 0, jumpIn: -1, init: false, hopT: 0, trick: 0 };
+}
+const followers = [
+  makeFollower('models/tiger.glb', 0.9, -0.5, 1.5, 'waddle', null, '포돌이'),
+  makeFollower('models/rabbit.glb', 0.8, -0.6, -1.5, 'hop', new THREE.Color(1.3, 1.26, 1.18), '토실이'), // 토끼는 구운 색이 칙칙해 살짝 밝힘
+  makeFollower('models/duck.glb', 0.62, 1.0, -0.8, 'scurry', null, '란오리'), // 오리는 앞장서서 종종종
+];
+const T = followers[0].rig;
+function updateFollower(st, dt, t) {
+  const R = st.rig, by = bearState.yaw;
   _f.set(Math.sin(by), 0, Math.cos(by)); _r.set(Math.cos(by), 0, -Math.sin(by));
-  _want.set(player.pos.x, 0, player.pos.z).addScaledVector(_f, -0.5).addScaledVector(_r, 1.5);
+  _want.set(player.pos.x, 0, player.pos.z).addScaledVector(_f, st.fwd).addScaledVector(_r, st.right);
   if (!st.init || Math.hypot(_want.x - st.pos.x, _want.z - st.pos.z) > 60) {
     st.pos.set(_want.x, groundAt(_want.x, _want.z), _want.z); st.vel.set(0, 0, 0); st.init = true;
   }
   const dx = _want.x - st.pos.x, dz = _want.z - st.pos.z, d = Math.hypot(dx, dz);
   const g0 = groundAt(st.pos.x, st.pos.z), swim = g0 < -1.1;
-  const sp = d > 0.5 ? Math.min(13, d * 2.4) * (swim ? 0.5 : 1) : 0;
+  const maxSp = st.style === 'scurry' ? 12 : 13;
+  const sp = d > 0.5 ? Math.min(maxSp, d * 2.4) * (swim ? 0.5 : 1) : 0;
   const k = 1 - Math.exp(-dt * 8);
-  st.vel.x += ((d > 0 ? dx / d : 0) * sp - st.vel.x) * k; st.vel.z += ((d > 0 ? dz / d : 0) * sp - st.vel.z) * k;
-  // 곰돌이가 뛰면 포돌이도 살짝 늦게 따라 뛴다
-  if (!player.fly && !player.onGround && player.vel.y > 4 && st.onGround && st.jumpIn < 0) st.jumpIn = 0.14;
+  const hop = st.style === 'hop';
+  // 토끼는 공중에서 방향을 못 바꾸고, 땅에 닿을 때만 다음 점프 방향을 정한다
+  if (!hop || st.onGround) { st.vel.x += ((d > 0 ? dx / d : 0) * sp - st.vel.x) * k; st.vel.z += ((d > 0 ? dz / d : 0) * sp - st.vel.z) * k; }
+  // 곰둥이가 뛰면 조금씩 늦게 따라 뛴다
+  if (!player.fly && !player.onGround && player.vel.y > 4 && st.onGround && st.jumpIn < 0) st.jumpIn = 0.12 + Math.abs(st.right) * 0.08;
   if (st.jumpIn >= 0) { st.jumpIn -= dt; if (st.jumpIn < 0 && st.onGround) { st.vel.y = 6.5; st.onGround = false; } }
+  if (hop && st.onGround && sp > 0.5 && !swim) { st.vel.y = 3.2 + Math.min(1.5, sp * 0.12); st.onGround = false; }
   st.vel.y -= 22 * dt;
   st.pos.addScaledVector(st.vel, dt);
   const floor = swim ? -1.1 : groundAt(st.pos.x, st.pos.z);
-  if (st.pos.y <= floor) { st.pos.y = floor; st.vel.y = 0; st.onGround = true; } else if (st.pos.y > floor + 0.1) st.onGround = false;
-  tiger.position.copy(st.pos);
+  if (st.pos.y <= floor) { if (hop && !st.onGround) st.vel.x = st.vel.z = 0; st.pos.y = floor; st.vel.y = 0; st.onGround = true; } else if (st.pos.y > floor + 0.1) st.onGround = false;
+  st.group.position.copy(st.pos);
   const hs = Math.hypot(st.vel.x, st.vel.z);
-  st.idle = hs < 0.3 && st.onGround ? st.idle + dt : 0;
+  const moving = hs > 0.3 || (hop && !st.onGround && st.vel.y !== 0 && d > 0.5);
+  st.idle = !moving && st.onGround ? st.idle + dt : 0;
   // 서 있을 땐 카메라 쪽을 바라보며, 움직일 땐 가는 방향을 본다
   const face = hs > 0.3 ? Math.atan2(st.vel.x, st.vel.z) : Math.atan2(camera.position.x - st.pos.x, camera.position.z - st.pos.z);
   st.yaw = angLerp(st.yaw, face, 1 - Math.exp(-dt * (hs > 0.3 ? 10 : 3)));
-  tiger.rotation.y = st.yaw;
+  st.group.rotation.y = st.yaw;
   const amp = Math.min(1, hs / 5), run = smooth(5, 11, hs);
-  st.phase += dt * (3.2 + hs * 1.4);
+  st.phase += dt * (st.style === 'scurry' ? 5 + hs * 2.2 : 3.2 + hs * 1.4);
   const ph = st.phase, sw = Math.sin(ph), air = !st.onGround;
-  const leg = air ? -0.6 : sw * amp * (0.6 + 0.35 * run);
-  T.legL.rotation.x = leg; T.legR.rotation.x = air ? -0.3 : -leg;
-  // 한동안 서 있으면 참고 그림처럼 두 팔을 활짝 벌리고 오른손을 흔든다
-  const wave = smooth(1.2, 1.8, st.idle);
-  for (const [arm, s] of [[T.armL, -1], [T.armR, 1]]) {
-    arm.rotation.x = air ? -2.3 : -s * sw * amp * (0.7 + 0.5 * run) * (1 - wave);
-    arm.rotation.z = s * wave * (0.9 + (s > 0 ? Math.sin(t * 9) * 0.25 : 0));
-  }
-  T.body.position.y = Math.abs(Math.cos(ph)) * 0.05 * amp;
-  T.hips.rotation.z = sw * 0.1 * amp;
-  T.hips.rotation.x = run * 0.22;
   const idle = 1 - Math.min(1, hs / 1.5);
-  T.hips.scale.set(1, 1 + Math.sin(t * 2.6 + 1) * 0.014 * idle, 1);
-  T.head.rotation.z = Math.sin(t * 0.9 + 2) * 0.12 * idle - sw * 0.05 * amp;
-  T.head.rotation.x = -run * 0.15 + Math.sin(t * 1.5) * 0.04 * idle;
-  T.earL.rotation.z = Math.sin(t * 8 + 2) * 0.07 * (amp + 0.25); T.earR.rotation.z = -Math.sin(t * 8 + 0.5) * 0.07 * (amp + 0.25);
-  for (const j of T.joints) j.apply();
+  if (hop) {
+    // 깡충: 공중에선 다리를 뒤로 쭉, 착지하면 웅크림. 귀는 뛸 때 뒤로 젖혀지고 착지에 앞으로 팔랑
+    const up = air ? Math.max(0, Math.min(1, st.vel.y / 4)) : 0;
+    const crouch = st.onGround && moving ? 0.35 : 0;
+    R.legL.rotation.x = R.legR.rotation.x = air ? 0.9 - up * 0.5 : -crouch;
+    R.armL.rotation.x = R.armR.rotation.x = (air ? -1.1 : 0.2 * crouch) + Math.sin(t * 2.1) * 0.06 * idle;
+    R.armL.rotation.z = ARM_DROP * 0.95; R.armR.rotation.z = -ARM_DROP * 0.95;
+    R.hips.rotation.x = air ? -0.35 + up * 0.2 : crouch * 0.6;
+    const flop = air ? 0.55 - up * 0.8 : -0.15 * crouch;
+    R.earL.rotation.x = R.earR.rotation.x = flop + Math.sin(t * 1.3) * 0.05 * idle;
+    R.earL.rotation.z = Math.sin(t * 7) * 0.08 * idle; R.earR.rotation.z = -Math.sin(t * 7 + 1) * 0.08 * idle;
+    // 서 있을 땐 코를 씰룩이듯 머리를 잘게 끄덕이고, 가끔 제자리에서 두 번 깡충 뛴다
+    R.head.rotation.x = Math.sin(t * 14) * 0.015 * idle + Math.sin(t * 1.1) * 0.04 * idle;
+    R.head.rotation.z = Math.sin(t * 0.8 + 1) * 0.1 * idle;
+    if (st.idle > 5 && st.onGround) { st.vel.y = 2.6; st.onGround = false; st.idle = 2.5; }
+  } else if (st.style === 'scurry') {
+    // 종종걸음: 짧은 다리를 빠르게, 날개(팔)는 살짝 퍼덕, 엉덩이를 좌우로 씰룩
+    const leg = air ? -0.5 : sw * amp * 0.5;
+    R.legL.rotation.x = leg; R.legR.rotation.x = air ? -0.3 : -leg;
+    const flap = air ? 0.9 : Math.abs(Math.sin(ph * 0.5)) * 0.35 * amp + Math.sin(t * 1.7) * 0.05 * idle;
+    R.armL.rotation.z = ARM_DROP * 0.85 - flap; R.armR.rotation.z = -(ARM_DROP * 0.85 - flap);
+    R.armL.rotation.x = R.armR.rotation.x = 0;
+    R.hips.rotation.z = sw * 0.16 * amp; R.hips.rotation.y = -sw * 0.12 * amp;
+    R.hips.rotation.x = run * 0.15;
+    R.head.rotation.x = -run * 0.1 + Math.sin(t * 1.6) * 0.05 * idle + (air ? -0.2 : 0);
+    R.head.rotation.z = Math.sin(t * 1.1 + 2) * 0.12 * idle;
+    R.head.rotation.y = (st.idle > 3 ? Math.sin(t * 2.2) * 0.35 * smooth(3, 3.6, st.idle) : 0);
+    // 꼬리깃을 쫑긋 흔든다
+    R.tail.rotation.x = Math.sin(t * 5) * 0.12 * (0.4 + amp) + 0.1 * (1 - idle);
+  } else {
+    // 뒤뚱뒤뚱 (포돌이)
+    const leg = air ? -0.6 : sw * amp * (0.6 + 0.35 * run);
+    R.legL.rotation.x = leg; R.legR.rotation.x = air ? -0.3 : -leg;
+    // 한동안 서 있으면 참고 그림처럼 두 팔을 벌리고 오른손을 흔든다
+    const wave = smooth(1.2, 1.8, st.idle);
+    for (const [arm, s] of [[R.armL, -1], [R.armR, 1]]) {
+      arm.rotation.x = air ? -2.3 : (-s * sw * amp * (0.8 + 0.5 * run) + Math.sin(t * 1.9 + 1) * 0.07) * (1 - wave);
+      const raise = s > 0 ? ARM_DROP + 0.9 + Math.sin(t * 9) * 0.25 : ARM_DROP * 0.7;
+      arm.rotation.z = -s * ((air ? 0.6 : ARM_DROP) - wave * raise);
+    }
+    R.hips.rotation.z = sw * 0.1 * amp;
+    R.hips.rotation.x = run * 0.22;
+    R.head.rotation.z = Math.sin(t * 0.9 + 2) * 0.12 * idle - sw * 0.05 * amp;
+    R.head.rotation.x = -run * 0.15 + Math.sin(t * 1.5) * 0.04 * idle;
+    R.earL.rotation.z = Math.sin(t * 8 + 2) * 0.07 * (amp + 0.25); R.earR.rotation.z = -Math.sin(t * 8 + 0.5) * 0.07 * (amp + 0.25);
+    // 꼬리: 마디마다 조금씩 늦게 따라오며 좌우로 살랑, 신나면(달릴 때) 더 크게
+    for (let i = 0; i < R.tails.length; i++) {
+      R.tails[i].rotation.y = Math.sin(t * 3.2 - i * 0.7) * (0.18 + 0.14 * amp);
+      R.tails[i].rotation.x = Math.sin(t * 2.1 - i * 0.5) * 0.06 - run * 0.1;
+    }
+  }
+  R.body.position.y = hop ? 0 : Math.abs(Math.cos(ph)) * 0.05 * amp;
+  R.hips.scale.set(1, 1 + Math.sin(t * 2.6 + 1) * 0.014 * idle, 1);
+  for (const j of R.joints) j.apply();
 }
 
 // ---------- 시각(해 위치) ----------
@@ -756,7 +861,7 @@ addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 let third = true;
 const viewBtn = document.getElementById('view');
-function toggleView() { third = !third; viewBtn.textContent = third ? '시점: 곰돌이 뒤 (V)' : '시점: 곰돌이 눈 (V)'; bear.visible = third; if (third) player.pitch = Math.min(player.pitch, 0.7); }
+function toggleView() { third = !third; viewBtn.textContent = third ? '시점: 곰둥이 뒤 (V)' : '시점: 곰둥이 눈 (V)'; bear.visible = third; if (third) player.pitch = Math.min(player.pitch, 0.7); }
 viewBtn.addEventListener('click', (e) => { toggleView(); e.currentTarget.blur(); });
 const flyBtn = document.getElementById('fly');
 function toggleFly() { player.fly = !player.fly; flyBtn.setAttribute('aria-pressed', String(player.fly)); player.vel.set(0, 0, 0); }
@@ -863,9 +968,9 @@ function frame(now) {
   updateGrass(p.x, p.z);
   const feetY = p.y - EYE;
   updateBear(dt, feetY, timeU.value);
-  updateTiger(dt, timeU.value);
+  for (const st of followers) updateFollower(st, dt, timeU.value);
   if (third) {
-    // 곰돌이 뒤 위쪽에서 따라가는 카메라. 땅에 박히지 않게 지면보다 위로 올린다
+    // 곰둥이 뒤 위쪽에서 따라가는 카메라. 땅에 박히지 않게 지면보다 위로 올린다
     const dist = player.fly ? 7 : 4.2;
     camTarget.set(p.x, feetY + 1.1, p.z);
     camDir.set(-Math.sin(player.yaw) * Math.cos(player.pitch), Math.sin(player.pitch), -Math.cos(player.yaw) * Math.cos(player.pitch));
@@ -903,7 +1008,7 @@ function preload() {
   bar.style.width = Math.round((1 - Math.max(0, left) / total) * 100) + '%';
   if (left > 0) return requestAnimationFrame(preload);
   player.pos.y = groundAt(player.pos.x, player.pos.z) + EYE;
-  gateMsg.textContent = '곰돌이와 친구 포돌이가 함께 걸어가는 만큼 계속 생겨나는 산과 숲을 돌아다닙니다. 마우스로 둘러보고 키보드로 걸어요.';
+  gateMsg.textContent = '포돌이와 친구들 포돌이·토실이·란오리가 함께 걸어가는 만큼 계속 생겨나는 산과 숲을 돌아다닙니다. 마우스로 둘러보고 키보드로 걸어요.';
   bar.style.width = '100%'; enter.disabled = false; enter.focus();
   bearState.yaw = player.yaw + Math.PI;
   requestAnimationFrame(frame);
