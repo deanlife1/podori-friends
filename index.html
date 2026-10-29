@@ -71,7 +71,7 @@
       <li>빛: 대기 산란 하늘 셰이더를 반사광으로도 사용, 그림자·안개·흐르는 구름</li>
       <li>후처리: 안티앨리어싱, 빛 번짐, 색보정, 비네팅, 필름 그레인</li>
       <li>곰둥이·포돌이·토실이·란오리: 참고 그림 → Hunyuan3D(무료)로 모양 생성 → 그림을 앞·뒤·옆에서 투영해 텍스처 베이크 → 블렌더 스크립트로 뼈대 자동 삽입</li>
-      <li>털: 뼈대를 공유하는 껍질 10겹을 법선 방향으로 띄워 겹쳐 그리는 셸 퍼, 끝이 바람에 눕는다</li>
+      <li>털: 뼈대를 공유하는 껍질 6겹을 법선 방향으로 띄워 겹쳐 그리는 셸 퍼, 끝이 바람에 눕는다</li>
       <li>동작: 뒤뚱걸음·깡충뛰기·종종걸음·점프·비행·손 흔들기·꼬리 살랑을 뼈 회전으로 코드에서 계산</li>
       <li>도구: Three.js r160, Blender 5.2, Hunyuan3D 2 (모두 무료)</li>
     </ul>
@@ -87,10 +87,11 @@
   </label>
   <button id="view" type="button">시점: 곰둥이 뒤 (V)</button>
   <button id="fly" type="button" aria-pressed="false">비행 모드 (F)</button>
+  <button id="quality" type="button">품질: 높음 (Q)</button>
 </aside>
 
 <div id="keys" class="panel">
-  <span class="mouse-only"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 이동 · <kbd>Shift</kbd> 달리기 · <kbd>Space</kbd> 점프 · <kbd>F</kbd> 비행 · <kbd>V</kbd> 시점 · <kbd>Esc</kbd> 마우스 풀기</span>
+  <span class="mouse-only"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 이동 · <kbd>Shift</kbd> 달리기 · <kbd>Space</kbd> 점프 · <kbd>F</kbd> 비행 · <kbd>V</kbd> 시점 · <kbd>Q</kbd> 품질 · <kbd>Esc</kbd> 마우스 풀기</span>
   <span class="touch-only">왼쪽 화면 끌기: 이동 · 오른쪽 화면 끌기: 둘러보기</span>
 </div>
 
@@ -158,7 +159,7 @@ function height(x, z) {
 // ---------- 렌더러·장면 ----------
 const canvas = document.getElementById('world');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 0.62;
@@ -183,7 +184,7 @@ let envRT = null;
 
 const sunLight = new THREE.DirectionalLight(0xffffff, 3);
 sunLight.castShadow = true;
-sunLight.shadow.mapSize.set(2048, 2048);
+sunLight.shadow.mapSize.set(1536, 1536);
 Object.assign(sunLight.shadow.camera, { left: -95, right: 95, top: 95, bottom: -95, near: 1, far: 900 });
 sunLight.shadow.bias = -0.0004; sunLight.shadow.normalBias = 0.6;
 scene.add(sunLight, sunLight.target);
@@ -541,7 +542,7 @@ function updateChunks(px, pz, budget, rad = R) {
 }
 
 // ---------- 풀: 플레이어 주변에만, 세계에 고정된 격자로 배치 ----------
-const GR = 30, GSP = 0.25, GCELLS = Math.ceil(GR / GSP);
+const GR = 26, GSP = 0.27, GCELLS = Math.ceil(GR / GSP);
 const grass = new THREE.InstancedMesh(bladeGeo, grassMat, (2 * GCELLS + 1) ** 2);
 grass.frustumCulled = false; grass.receiveShadow = true; scene.add(grass);
 let grassCenter = null;
@@ -568,7 +569,7 @@ function updateGrass(px, pz) {
     arr[o + 12] = x; arr[o + 13] = h - 0.05; arr[o + 14] = z; arr[o + 15] = 1;
     n++;
   }
-  grass.count = n; grass.instanceMatrix.needsUpdate = true;
+  grass.count = quality.level >= 1 ? n : Math.min(n, 9000); grass.instanceMatrix.needsUpdate = true;
 }
 
 // ---------- 캐릭터: 참고 그림 → Hunyuan3D 모양 → 그림 투영 텍스처 → 블렌더 자동 리깅으로 만든 GLB를 불러온다 ----------
@@ -591,7 +592,8 @@ class Joint {
 const dummyJoint = () => ({ rotation: new THREE.Euler(), position: new THREE.Vector3(), scale: new THREE.Vector3(1, 1, 1), apply() {} });
 const gltfLoader = new GLTFLoader();
 // 셸 퍼: 껍질을 법선 방향으로 uShell만큼 띄우고, 바깥 겹일수록 더 많이 뚫어서 털끝이 가늘어지게. 뿌리 쪽은 어둡게(자기 그림자).
-const FUR_SHELLS = 10, FUR_LEN = 0.022;
+const FUR_SHELLS = 6, FUR_LEN = 0.022;
+const furShells = []; // 거리·품질에 따라 켜고 끄기 위해 모아 둔다
 function furMaterial(base, layer) {
   const m = base.clone(); m.side = THREE.FrontSide; m.transparent = false; m.depthWrite = true;
   m.onBeforeCompile = (sh) => {
@@ -627,7 +629,7 @@ function loadCharacter(url, group, rig, names, tint) {
     // 털: 같은 뼈대를 공유하는 껍질을 겹쳐 그린다 (셸 퍼)
     for (const o of meshes) for (let i = 1; i <= FUR_SHELLS; i++) {
       const sh = o.clone(); sh.material = furMaterial(o.material, i / FUR_SHELLS); sh.castShadow = false; sh.receiveShadow = true; sh.frustumCulled = false;
-      o.parent.add(sh);
+      o.parent.add(sh); furShells.push({ mesh: sh, layer: i, group });
     }
     model.updateMatrixWorld(true);
     const gq = group.getWorldQuaternion(new THREE.Quaternion()).invert();
@@ -647,7 +649,7 @@ function nameTag(text) {
   g.lineWidth = 8; g.strokeStyle = 'rgba(20, 28, 20, 0.75)'; g.strokeText(text, 128, 42); g.fillStyle = '#fff6dc'; g.fillText(text, 128, 42);
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
   const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: true }));
-  sp.scale.set(0.9, 0.28, 1); sp.position.y = 1.0 + 0.2 / 0.92; sp.renderOrder = 5; return sp;
+  sp.scale.set(0.9, 0.28, 1); sp.position.y = 1.0 + 0.3 / 0.92; sp.renderOrder = 5; return sp;
 }
 const BONES = { hips: 'Hips', chest: 'Chest', head: 'Head', earL: 'Ear.L', earR: 'Ear.R', armL: 'UpperArm.L', armR: 'UpperArm.R', legL: 'Thigh.L', legR: 'Thigh.R', tail: 'Tail1', tail2: 'Tail2', tail3: 'Tail3' };
 function makeRig(group) {
@@ -705,7 +707,7 @@ function updateBear(dt, feetY, t) {
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _want = new THREE.Vector3();
 function makeFollower(url, scale, fwd, right, style, tint, name) {
   const group = new THREE.Group(); group.scale.setScalar(scale); scene.add(group);
-  const tag = nameTag(name); tag.scale.multiplyScalar(1 / scale); tag.position.y = 1.0 + 0.2 / scale; group.add(tag); // 머리 위 20cm, 크기는 화면에서 같게
+  const tag = nameTag(name); tag.scale.multiplyScalar(1 / scale); tag.position.y = 1.0 + 0.3 / scale; group.add(tag); // 머리 위 30cm, 크기는 화면에서 같게
   const rig = makeRig(group); loadCharacter(url, group, rig, BONES, tint);
   return { group, rig, fwd, right, style, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, phase: 0, onGround: true, idle: 0, jumpIn: -1, init: false, hopT: 0, trick: 0 };
 }
@@ -932,11 +934,12 @@ function updatePlayer(dt) {
 }
 
 // ---------- 후처리: 멀티샘플 → 빛 번짐 → 톤매핑 → 색보정·비네팅·필름 그레인 ----------
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
-composer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 2 }));
+composer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
-composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.18, 0.55, 0.95));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.18, 0.55, 0.95);
+composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 composer.addPass(new ShaderPass({
   uniforms: { tDiffuse: { value: null }, uTime: timeU },
@@ -959,6 +962,33 @@ const clock = new THREE.Clock();
 const posEl = document.getElementById('pos'), altEl = document.getElementById('alt'), fpsEl = document.getElementById('fps');
 let frames = 0, fpsT = 0, running = false, camInit = false;
 const camTarget = new THREE.Vector3(), camDir = new THREE.Vector3(), camWant = new THREE.Vector3();
+// ---------- 자동 품질 ----------
+const quality = { level: 2, lowT: 0, highT: 0 }; // 2 높음, 1 보통, 0 낮음
+const _cp = new THREE.Vector3();
+function applyQuality() {
+  const q = quality.level;
+  bloomPass.enabled = q >= 1;
+  renderer.shadowMap.enabled = q >= 1;
+  grass.visible = true; grass.count = Math.min(grass.count, q >= 1 ? 1e9 : 9000);
+  document.getElementById('quality').textContent = ['품질: 낮음', '품질: 보통', '품질: 높음'][q] + ' (Q)';
+}
+function updateFur() {
+  // 멀리 있는 캐릭터는 털 껍질을 생략, 품질이 낮으면 겹 수도 줄인다
+  const maxLayer = quality.level === 2 ? FUR_SHELLS : quality.level === 1 ? 3 : 0;
+  for (const f of furShells) {
+    f.group.getWorldPosition(_cp);
+    const d = _cp.distanceTo(camera.position);
+    f.mesh.visible = f.layer <= maxLayer && d < (quality.level === 2 ? 14 : 8);
+  }
+}
+function autoQuality(fps) {
+  if (fps < 38) { quality.lowT++; quality.highT = 0; } else if (fps > 56) { quality.highT++; quality.lowT = 0; } else { quality.lowT = quality.highT = 0; }
+  if (quality.lowT >= 3 && quality.level > 0) { quality.level--; quality.lowT = 0; applyQuality(); }
+  if (quality.highT >= 12 && quality.level < 2) { quality.level++; quality.highT = 0; applyQuality(); }
+}
+document.getElementById('quality').addEventListener('click', (e) => { quality.level = (quality.level + 2) % 3; quality.highT = quality.lowT = -9999; applyQuality(); e.currentTarget.blur(); });
+addEventListener('keydown', (e) => { if (e.code === 'KeyQ' && !e.repeat) document.getElementById('quality').click(); });
+
 function frame(now) {
   const dt = Math.min(clock.getDelta(), 0.05);
   timeU.value += dt;
@@ -988,10 +1018,11 @@ function frame(now) {
   sunLight.target.position.set(Math.round(p.x / 8) * 8, 0, Math.round(p.z / 8) * 8);
   sunLight.position.copy(sunLight.target.position).addScaledVector(sunDir.y > 0 ? sunDir : sunDir.clone().negate(), 400);
   refreshEnv(now);
+  updateFur();
   composer.render();
   frames++; fpsT += dt;
   if (fpsT > 0.5) {
-    fpsEl.textContent = Math.round(frames / fpsT) + ' fps'; frames = 0; fpsT = 0;
+    const fps = Math.round(frames / fpsT); fpsEl.textContent = fps + ' fps'; if (running) autoQuality(fps); frames = 0; fpsT = 0;
     posEl.textContent = `${Math.round(p.x)}, ${Math.round(p.z)}`;
     altEl.textContent = `${Math.round(p.y - EYE)} m`;
   }
