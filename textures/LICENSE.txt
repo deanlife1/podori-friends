@@ -1,0 +1,8 @@
+All textures and HDRI in this folder are from Poly Haven (https://polyhaven.com), licensed CC0 1.0.
+grass: https://polyhaven.com/a/leafy_grass
+rock: https://polyhaven.com/a/aerial_rocks_02
+snow: https://polyhaven.com/a/snow_02
+dirt: https://polyhaven.com/a/forest_floor
+bark: https://polyhaven.com/a/knotted_pine_bark
+planks: https://polyhaven.com/a/wood_planks_grey
+alps_field: https://polyhaven.com/a/alps_field
