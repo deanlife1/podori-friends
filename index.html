@@ -70,7 +70,7 @@
   </label>
   <button id="view" type="button">시점: 곰둥이 뒤 (V)</button>
   <button id="fly" type="button" aria-pressed="false">비행 모드 (F)</button>
-  <button id="quality" type="button">품질: 높음 (Q)</button>
+  <button id="quality" type="button">품질: 최상 (Q)</button>
   <button id="mute" type="button">소리: 켜짐 (M)</button>
   <div class="row"><span>놀이</span><b id="jars">꿀단지 0 / 12</b></div>
 </aside>
@@ -426,6 +426,7 @@ const bladeGeo = (() => {
 const grassMat = new THREE.MeshStandardMaterial({ vertexColors: true, side: THREE.DoubleSide, roughness: 0.85 });
 grassMat.onBeforeCompile = (shader) => {
   shader.uniforms.uTime = timeU;
+  shader.fragmentShader = shader.fragmentShader.replace('#include <normal_fragment_begin>', THREE.ShaderChunk.normal_fragment_begin.replace('gl_FrontFacing ? 1.0 : - 1.0', '1.0'));
   shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nuniform float uTime;')
     .replace('#include <begin_vertex>', `vec3 transformed = vec3(position);
       vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);
@@ -741,7 +742,7 @@ const sfx = (() => {
     ac = new (window.AudioContext || window.webkitAudioContext)();
     master = ac.createGain(); master.gain.value = muted ? 0 : 0.8; master.connect(ac.destination);
     musicGain = ac.createGain(); musicGain.gain.value = 0.16;
-    delay = ac.createDelay(1.0); delay.delayTime.value = STEP * 3; const fb = ac.createGain(); fb.gain.value = 0.32; const wet = ac.createGain(); wet.gain.value = 0.35;
+    delay = ac.createDelay(2.0); delay.delayTime.value = STEP * 3; const fb = ac.createGain(); fb.gain.value = 0.32; const wet = ac.createGain(); wet.gain.value = 0.35;
     musicGain.connect(master); musicGain.connect(delay); delay.connect(fb).connect(delay); delay.connect(wet).connect(master);
     // 바람: 계속 흐르는 저음 노이즈
     const wn = ac.createBufferSource(), buf = ac.createBuffer(1, ac.sampleRate * 4, ac.sampleRate), d = buf.getChannelData(0);
@@ -819,7 +820,7 @@ function updateFollower(st, dt, t) {
   // 곰둥이가 뛰면 조금씩 늦게 따라 뛴다
   if (!player.fly && !player.onGround && player.vel.y > 4 && st.onGround && st.jumpIn < 0) st.jumpIn = 0.12 + Math.abs(st.right) * 0.08;
   if (st.jumpIn >= 0) { st.jumpIn -= dt; if (st.jumpIn < 0 && st.onGround) { st.vel.y = 6.5; st.onGround = false; } }
-  if (hop && st.onGround && sp > 0.5 && !swim) { st.vel.y = 3.2 + Math.min(1.5, sp * 0.12); st.onGround = false; }
+  if (hop && st.onGround && sp > 0.5 && !swim) { const hsp = Math.min(sp * 1.15, 12); st.vel.x = dx / d * hsp; st.vel.z = dz / d * hsp; st.vel.y = 3.2 + Math.min(1.5, sp * 0.12); st.onGround = false; }
   st.vel.y -= 22 * dt;
   st.pos.addScaledVector(st.vel, dt);
   resolveCollisions(st.pos, 0.4);
@@ -972,9 +973,22 @@ function placeAsset(name, f, r, yaw = 0, scale = 1, sink = 0.15) {
   m.castShadow = true; m.receiveShadow = true; villageGroup.add(m); return m;
 }
 const faceSpawn = (f, r) => { const p = vpos(f, r); return Math.atan2(sx - p.x, sz - p.y); };
+function litWindows(m) {
+  m.userData.lit = true;
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uNight = ffMat.uniforms.uNight;
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uNight;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        #ifdef USE_COLOR
+        float win = step(0.12, vColor.b - vColor.r) * step(0.55, vColor.b);
+        totalEmissiveRadiance += vec3(1.0, 0.68, 0.32) * win * uNight * 2.4;
+        #endif`);
+  };
+  m.needsUpdate = true;
+}
 function buildVillage(g) {
   assets = {};
-  g.scene.traverse((o) => { if (o.isMesh) { o.material.roughness = 0.8; o.material.envMapIntensity = 0.8; assets[o.name] = o; } });
+  g.scene.traverse((o) => { if (o.isMesh) { o.material.roughness = 0.8; o.material.envMapIntensity = 0.8; assets[o.name] = o; if (!o.material.userData.lit) litWindows(o.material); } });
   // 건물
   const ch = placeAsset('church', 24, 0, faceSpawn(24, 0)); colliders.push({ x: ch.position.x, z: ch.position.z, r: 7.5 });
   for (const [nm, f, r] of [['chalet_a', 8, -17], ['chalet_b', 5, 15], ['chalet_c', -12, -16], ['chalet_b', -10, 18]]) {
@@ -1073,15 +1087,15 @@ function updateVillage(dt, t) {
 }
 function showToast(msg) { const el = document.getElementById('toast'); el.textContent = msg; el.hidden = false; clearTimeout(el._t); el._t = setTimeout(() => { el.hidden = true; }, 4000); }
 // 반딧불: 밤에 마을 주변에서 깜빡이는 점들
-const FF_N = 260, ffPos = new Float32Array(FF_N * 3), ffPh = new Float32Array(FF_N);
+const FF_N = 420, ffPos = new Float32Array(FF_N * 3), ffPh = new Float32Array(FF_N);
 for (let i = 0; i < FF_N; i++) { const a = Math.random() * 6.28, d = Math.random() * 60; ffPos[i * 3] = VC.x + Math.cos(a) * d; ffPos[i * 3 + 2] = VC.y + Math.sin(a) * d; ffPos[i * 3 + 1] = 0; ffPh[i] = Math.random() * 6.28; }
 const ffGeo = new THREE.BufferGeometry(); ffGeo.setAttribute('position', new THREE.BufferAttribute(ffPos, 3)); ffGeo.setAttribute('ph', new THREE.BufferAttribute(ffPh, 1));
 const ffMat = new THREE.ShaderMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   uniforms: { uTime: timeU, uNight: { value: 0 } },
   vertexShader: `attribute float ph; uniform float uTime; varying float vA;
     void main(){ vec3 p = position; p.y += 1.2 + sin(uTime * 0.7 + ph) * 0.8 + sin(uTime * 1.9 + ph * 2.0) * 0.3; p.x += sin(uTime * 0.5 + ph) * 1.5; p.z += cos(uTime * 0.4 + ph * 1.3) * 1.5;
-      vA = smoothstep(0.2, 1.0, sin(uTime * 2.3 + ph * 5.0)); vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = 140.0 / -mv.z; gl_Position = projectionMatrix * mv; }`,
-  fragmentShader: `uniform float uNight; varying float vA; void main(){ float d = length(gl_PointCoord - 0.5); float a = smoothstep(0.5, 0.1, d) * vA * uNight; gl_FragColor = vec4(1.0, 0.95, 0.5, a); }`,
+      vA = smoothstep(0.2, 1.0, sin(uTime * 2.3 + ph * 5.0)); vec4 mv = modelViewMatrix * vec4(p, 1.0); gl_PointSize = 260.0 / -mv.z; gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `uniform float uNight; varying float vA; void main(){ float d = length(gl_PointCoord - 0.5); float core = smoothstep(0.18, 0.0, d), glow = smoothstep(0.5, 0.0, d) * 0.45; float a = (core + glow) * vA * uNight; gl_FragColor = vec4(1.0, 0.92, 0.45, a) * 1.6; }`,
 });
 const fireflies = new THREE.Points(ffGeo, ffMat); fireflies.frustumCulled = false; scene.add(fireflies);
 function placeFireflies() { for (let i = 0; i < FF_N; i++) ffPos[i * 3 + 1] = groundAt(ffPos[i * 3], ffPos[i * 3 + 2]); ffGeo.attributes.position.needsUpdate = true; }
@@ -1170,7 +1184,7 @@ function updatePlayer(dt) {
 }
 
 // ---------- 후처리: 멀티샘플 → 빛 번짐 → 톤매핑 → 색보정·비네팅·필름 그레인 ----------
-const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 2 }));
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 }));
 composer.setPixelRatio(Math.min(devicePixelRatio, 1.25));
 composer.setSize(innerWidth, innerHeight);
 composer.addPass(new RenderPass(scene, camera));
@@ -1199,31 +1213,35 @@ const posEl = document.getElementById('pos'), altEl = document.getElementById('a
 let frames = 0, fpsT = 0, running = false, camInit = false;
 const camTarget = new THREE.Vector3(), camDir = new THREE.Vector3(), camWant = new THREE.Vector3();
 // ---------- 자동 품질 ----------
-const quality = { level: 2, lowT: 0, highT: 0 }; // 2 높음, 1 보통, 0 낮음
+const quality = { level: 3, lowT: 0, highT: 0 }; // 3 최상, 2 높음, 1 보통, 0 낮음
+const QUALITY = [{ pr: 0.85, shadow: 1024, name: '낮음' }, { pr: 1, shadow: 1024, name: '보통' }, { pr: 1.5, shadow: 2048, name: '높음' }, { pr: 2, shadow: 4096, name: '최상' }];
 const _cp = new THREE.Vector3();
 function applyQuality() {
-  const q = quality.level;
+  const q = quality.level, Q = QUALITY[q];
   bloomPass.enabled = q >= 1;
   renderer.shadowMap.enabled = q >= 1;
+  const pr = Math.min(devicePixelRatio, Q.pr);
+  if (renderer.getPixelRatio() !== pr) { renderer.setPixelRatio(pr); composer.setPixelRatio(pr); renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight); }
+  if (sunLight.shadow.mapSize.x !== Q.shadow) { sunLight.shadow.mapSize.set(Q.shadow, Q.shadow); if (sunLight.shadow.map) { sunLight.shadow.map.dispose(); sunLight.shadow.map = null; } }
   grass.visible = true; grass.count = Math.min(grass.count, q >= 1 ? 1e9 : 9000);
-  document.getElementById('quality').textContent = ['품질: 낮음', '품질: 보통', '품질: 높음'][q] + ' (Q)';
+  document.getElementById('quality').textContent = '품질: ' + Q.name + ' (Q)';
 }
 function updateFur() {
   // 멀리 있는 캐릭터는 털 껍질을 생략, 품질이 낮으면 겹 수도 줄인다
-  const maxLayer = quality.level === 2 ? FUR_SHELLS : quality.level === 1 ? 3 : 0;
+  const maxLayer = quality.level >= 2 ? FUR_SHELLS : quality.level === 1 ? 3 : 0;
   for (const f of furShells) {
     f.group.getWorldPosition(_cp);
     const d = _cp.distanceTo(camera.position);
-    f.mesh.visible = f.layer <= maxLayer && d < (quality.level === 2 ? 14 : 8);
+    f.mesh.visible = f.layer <= maxLayer && d < (quality.level === 3 ? 22 : quality.level === 2 ? 14 : 8);
   }
 }
 function autoQuality(fps) {
   if (document.hidden) return;
-  if (fps < 38) { quality.lowT++; quality.highT = 0; } else if (fps > 56) { quality.highT++; quality.lowT = 0; } else { quality.lowT = quality.highT = 0; }
+  if (fps < 45) { quality.lowT++; quality.highT = 0; } else if (fps > 58) { quality.highT++; quality.lowT = 0; } else { quality.lowT = quality.highT = 0; }
   if (quality.lowT >= 3 && quality.level > 0) { quality.level--; quality.lowT = 0; applyQuality(); }
-  if (quality.highT >= 12 && quality.level < 2) { quality.level++; quality.highT = 0; applyQuality(); }
+  if (quality.highT >= 12 && quality.level < 3) { quality.level++; quality.highT = 0; applyQuality(); }
 }
-document.getElementById('quality').addEventListener('click', (e) => { quality.level = (quality.level + 2) % 3; quality.highT = quality.lowT = -9999; applyQuality(); e.currentTarget.blur(); });
+document.getElementById('quality').addEventListener('click', (e) => { quality.level = (quality.level + 3) % 4; quality.highT = quality.lowT = -9999; applyQuality(); e.currentTarget.blur(); });
 addEventListener('keydown', (e) => { if (e.code === 'KeyQ' && !e.repeat) document.getElementById('quality').click(); if (e.code === 'KeyM' && !e.repeat) sfx.toggleMute(); });
 document.getElementById('mute').addEventListener('click', (e) => { sfx.start(); sfx.toggleMute(); e.currentTarget.blur(); });
 
@@ -1271,6 +1289,7 @@ addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; cam
 
 // 첫 화면: 주변 청크를 미리 만든 뒤 들어가기
 setTime(parseFloat(timeInput.value));
+applyQuality();
 const bar = document.querySelector('#bar i'), enter = document.getElementById('enter'), gateMsg = document.getElementById('gateMsg');
 const PRE = 4, total = (2 * PRE + 1) ** 2;
 function preload() {
