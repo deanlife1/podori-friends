@@ -37,6 +37,11 @@
   #stats button[aria-pressed="true"] { background: var(--accent); color: #1b1608; border-color: var(--accent); }
   #stats button:focus-visible, #enter:focus-visible, #brand summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #keys { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); left: calc(14px + env(safe-area-inset-left, 0px)); padding: 9px 13px; font-size: 12px; color: var(--ink-dim); line-height: 1.7; }
+  .nametag { position: fixed; left: 0; top: 0; z-index: 1; pointer-events: none; white-space: nowrap; transform-origin: 50% 100%; will-change: transform;
+    font-family: var(--font-display); font-size: 16px; line-height: 1; letter-spacing: -0.01em; color: #fffaf0; padding: 5px 11px 4px;
+    background: rgba(28, 36, 26, 0.48); border: 1px solid rgba(255, 250, 240, 0.22); border-radius: 999px; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+  .panel { z-index: 2; }
   #toast { left: 50%; top: calc(80px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); padding: 10px 18px; font-family: var(--font-display); font-size: 18px; color: var(--accent); z-index: 4; }
   #keys kbd { font-family: var(--font-body); font-size: 11px; color: var(--ink); border: 1px solid var(--glass-line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; margin-right: 2px; }
   #cross { position: fixed; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgba(255,255,255,0.7); pointer-events: none; }
@@ -669,13 +674,28 @@ function loadCharacter(url, group, rig, names, tint) {
   }).catch((e) => console.warn('캐릭터 로드 실패', url, e));
 }
 // 머리 위 이름표 (캔버스 글자 → 스프라이트)
+// 머리 위 이름표: 3D 위치만 따라가는 HTML 글자 (브라우저가 화면 해상도로 그려서 선명하고, 후처리가 안 먹는다)
+const labels = [];
+const _lp = new THREE.Vector3();
 function nameTag(text) {
-  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 80; const g = cv.getContext('2d');
-  g.font = '40px "Jua", "Apple SD Gothic Neo", sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
-  g.lineWidth = 8; g.strokeStyle = 'rgba(20, 28, 20, 0.75)'; g.strokeText(text, 128, 42); g.fillStyle = '#fff6dc'; g.fillText(text, 128, 42);
-  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, sizeAttenuation: true }));
-  sp.scale.set(0.9, 0.28, 1); sp.position.y = 1.0 + 0.3 / 0.92; sp.renderOrder = 5; return sp;
+  const anchor = new THREE.Object3D(); anchor.position.y = 1.0 + 0.12 / 0.92;
+  const el = document.createElement('div'); el.className = 'nametag'; el.textContent = text; document.body.appendChild(el);
+  labels.push({ anchor, el, shown: null });
+  return anchor;
+}
+function updateLabels() {
+  const w = innerWidth, h = innerHeight;
+  for (const L of labels) {
+    L.anchor.getWorldPosition(_lp);
+    const dist = _lp.distanceTo(camera.position);
+    _lp.project(camera);
+    const vis = _lp.z < 1 && dist < 45 && Math.abs(_lp.x) < 1.1 && Math.abs(_lp.y) < 1.1 && L.anchor.parent && L.anchor.parent.visible !== false;
+    if (vis !== L.shown) { L.el.style.display = vis ? '' : 'none'; L.shown = vis; }
+    if (!vis) continue;
+    const sc = Math.max(0.7, Math.min(1.15, 9 / Math.max(dist, 1)));
+    L.el.style.transform = `translate(${((_lp.x * 0.5 + 0.5) * w).toFixed(1)}px, ${((-_lp.y * 0.5 + 0.5) * h).toFixed(1)}px) translate(-50%, -100%) scale(${sc.toFixed(3)})`;
+    L.el.style.opacity = String(Math.min(1, (45 - dist) / 12));
+  }
 }
 const BONES = { hips: 'Hips', chest: 'Chest', head: 'Head', earL: 'Ear.L', earR: 'Ear.R', armL: 'UpperArm.L', armR: 'UpperArm.R', legL: 'Thigh.L', legR: 'Thigh.R', tail: 'Tail1', tail2: 'Tail2', tail3: 'Tail3' };
 function makeRig(group) {
@@ -809,7 +829,7 @@ const sfx = (() => {
 const _f = new THREE.Vector3(), _r = new THREE.Vector3(), _want = new THREE.Vector3();
 function makeFollower(url, scale, fwd, right, style, tint, name) {
   const group = new THREE.Group(); group.scale.setScalar(scale); scene.add(group);
-  const tag = nameTag(name); tag.scale.multiplyScalar(1 / scale); tag.position.y = 1.0 + 0.3 / scale; group.add(tag); // 머리 위 30cm, 크기는 화면에서 같게
+  const tag = nameTag(name); tag.position.y = 1.0 + 0.12 / scale; group.add(tag); // 머리 위 12cm
   const rig = makeRig(group); loadCharacter(url, group, rig, BONES, tint);
   return { group, rig, fwd, right, style, pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, phase: 0, onGround: true, idle: 0, jumpIn: -1, init: false, hopT: 0, trick: 0 };
 }
@@ -1294,6 +1314,7 @@ function frame(now) {
   updateFur();
   if (running) { updateVillage(dt, timeU.value); sfx.update(dt, Math.hypot(player.vel.x, player.vel.z) > 0.5, keys.has('ShiftLeft') || keys.has('ShiftRight'), player.onGround && !player.fly, dayF); }
   composer.render();
+  updateLabels();
   frames++; fpsT += dt;
   if (fpsT > 0.5) {
     const fps = Math.round(frames / fpsT); fpsEl.textContent = fps + ' fps'; if (running) autoQuality(fps); frames = 0; fpsT = 0;
