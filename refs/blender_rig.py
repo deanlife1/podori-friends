@@ -1,13 +1,13 @@
 # 블렌더 헤드리스용: AI가 만든 GLB를 읽어 크기를 맞추고, 면을 줄이고, 뼈대를 자동 배치해 자동 가중치로 붙인 뒤 GLB로 내보낸다.
 # 사용: blender -b --python rig.py -- <입력.glb> <출력.glb> <미리보기 폴더> [앞방향 회전 도]
-import bpy, sys, math
+import bpy, sys, math, os
 from mathutils import Vector
 
 argv = sys.argv[sys.argv.index('--') + 1:]
 src, dst, prev, views, name = argv[0], argv[1], argv[2], argv[3], argv[4]
 face_yaw = float(argv[5]) if len(argv) > 5 else 0.0
 import json, os
-TARGET_FACES = 24000
+TARGET_FACES = int(os.environ.get('FACES', '16000'))
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=src)
@@ -110,7 +110,7 @@ if views != 'keep':
     for c, w in ((cB, wB), (cL, wL), (cR, wR)):
         neww = mathn('ADD', accw, w); acc = mixc(acc, c, mathn('DIVIDE', w, mathn('ADD', neww, 1e-4))); accw = neww
     links.new(acc, bsdf.inputs['Base Color'])
-    bake_img = bpy.data.images.new('Baked_' + name, 1024, 1024); bn = nodes.new('ShaderNodeTexImage'); bn.image = bake_img; nodes.active = bn
+    bake_img = bpy.data.images.new('Baked_' + name, 2048, 2048); bn = nodes.new('ShaderNodeTexImage'); bn.image = bake_img; nodes.active = bn
     mesh.materials.clear(); mesh.materials.append(mat)
     scene = bpy.context.scene; scene.render.engine = 'CYCLES'; scene.cycles.device = 'CPU'; scene.cycles.samples = 8
     scene.render.bake.use_pass_direct = False; scene.render.bake.use_pass_indirect = False; scene.render.bake.use_pass_color = True

@@ -215,28 +215,35 @@ terrainMat.onBeforeCompile = (shader) => {
     float n1 = vnoise(vWPos.xz * 0.07), n2 = vnoise(vWPos.xz * 0.55), n3 = vnoise(vWPos.xz * 2.9);
     float mixK = smoothstep(0.35, 0.65, vnoise(vWPos.xz * 0.09 + 2.0));
     vec2 uvG = vWPos.xz * 0.22, uvS = vWPos.xz * 0.18, uvD = vWPos.xz * 0.25;
-    vec4 cG = tex2(tGrass, uvG, mixK), nG = tex2(tGrassN, uvG, mixK);
-    vec4 cS = tex2(tSnow, uvS, mixK), nS = tex2(tSnowN, uvS, mixK);
-    vec4 cD = tex2(tDirt, uvD, mixK), nD = tex2(tDirtN, uvD, mixK);
-    // 바위: 삼면 투영
-    vec3 bw = pow(abs(wn), vec3(4.0)); bw /= bw.x + bw.y + bw.z;
-    float rs = 0.14;
-    vec4 cR = texture2D(tRock, vWPos.zy * rs) * bw.x + texture2D(tRock, vWPos.xz * rs) * bw.y + texture2D(tRock, vWPos.xy * rs) * bw.z;
-    vec4 nR = texture2D(tRockN, vWPos.zy * rs) * bw.x + texture2D(tRockN, vWPos.xz * rs) * bw.y + texture2D(tRockN, vWPos.xy * rs) * bw.z;
-    // 정점 색은 큰 생태 구역 색조(마른 풀 등)로만 쓴다
-    vec3 tint = clamp(diffuseColor.rgb / vec3(0.36, 0.48, 0.19), 0.6, 1.6);
-    // 텍스처(낙엽 섞인 풀)를 알프스 초원답게 초록으로 보정
-    vec3 grass = cG.rgb * vec3(0.62, 0.98, 0.42) * mix(vec3(1.0), tint, 0.35) * (0.95 + 0.25 * n1);
     float dirtMask = smoothstep(0.62, 0.78, vnoise(vWPos.xz * 0.11 + 7.0)) * 0.85;
     float rockMask = max(smoothstep(0.17, 0.3, slope + (n2 - 0.5) * 0.12), smoothstep(150.0, 200.0, vWPos.y + n1 * 30.0) * 0.95);
     float snow = smoothstep(190.0, 222.0, vWPos.y + (n1 - 0.5) * 40.0) * (1.0 - smoothstep(0.3, 0.55, slope - n3 * 0.1));
     float sand = 1.0 - smoothstep(0.6, 3.0, vWPos.y + n2 * 1.6);
-    vec3 col = mix(grass, cD.rgb * 0.9, dirtMask);
-    vec4 nrm = mix(nG, nD, dirtMask);
-    vec3 rockCol = mix(cR.rgb, vec3(dot(cR.rgb, vec3(0.33))), 0.55) * vec3(0.78, 0.8, 0.84);
-    col = mix(col, rockCol, rockMask); nrm = mix(nrm, nR, rockMask);
-    col = mix(col, cS.rgb * 1.05, snow); nrm = mix(nrm, nS, snow);
-    col = mix(col, cD.rgb * 0.75, sand);
+    vec3 col = vec3(0.0); vec4 nrm = vec4(0.5, 0.5, 1.0, 1.0);
+    if (rockMask < 0.999) {
+      vec4 cG = tex2(tGrass, uvG, mixK), nG = tex2(tGrassN, uvG, mixK);
+      // 정점 색은 큰 생태 구역 색조(마른 풀 등)로만 쓰고, 낙엽 섞인 풀 텍스처를 알프스 초원답게 초록으로 보정
+      vec3 tint = clamp(diffuseColor.rgb / vec3(0.36, 0.48, 0.19), 0.6, 1.6);
+      col = cG.rgb * vec3(0.62, 0.98, 0.42) * mix(vec3(1.0), tint, 0.35) * (0.95 + 0.25 * n1); nrm = nG;
+      if (dirtMask + sand > 0.001) {
+        vec4 cD = tex2(tDirt, uvD, mixK), nD = tex2(tDirtN, uvD, mixK);
+        col = mix(col, cD.rgb * 0.9, dirtMask); nrm = mix(nrm, nD, dirtMask);
+        col = mix(col, cD.rgb * 0.75, sand);
+      }
+    }
+    if (rockMask > 0.001) {
+      // 바위: 삼면 투영
+      vec3 bw = pow(abs(wn), vec3(4.0)); bw /= bw.x + bw.y + bw.z;
+      float rs = 0.14;
+      vec4 cR = texture2D(tRock, vWPos.zy * rs) * bw.x + texture2D(tRock, vWPos.xz * rs) * bw.y + texture2D(tRock, vWPos.xy * rs) * bw.z;
+      vec4 nR = texture2D(tRockN, vWPos.zy * rs) * bw.x + texture2D(tRockN, vWPos.xz * rs) * bw.y + texture2D(tRockN, vWPos.xy * rs) * bw.z;
+      vec3 rockCol = mix(cR.rgb, vec3(dot(cR.rgb, vec3(0.33))), 0.55) * vec3(0.78, 0.8, 0.84);
+      col = mix(col, rockCol, rockMask); nrm = mix(nrm, nR, rockMask);
+    }
+    if (snow > 0.001) {
+      vec4 cS = tex2(tSnow, uvS, mixK), nS = tex2(tSnowN, uvS, mixK);
+      col = mix(col, cS.rgb * 1.05, snow); nrm = mix(nrm, nS, snow);
+    }
     col *= mix(1.0, 0.5, smoothstep(0.2, -2.5, vWPos.y));
     diffuseColor.rgb = col;
     vec3 tsN = nrm.xyz * 2.0 - 1.0;
@@ -558,7 +565,7 @@ const grass = new THREE.InstancedMesh(bladeGeo, grassMat, (2 * GCELLS + 1) ** 2)
 grass.frustumCulled = false; grass.receiveShadow = true; scene.add(grass);
 let grassCenter = null;
 function updateGrass(px, pz) {
-  if (grassCenter && Math.hypot(px - grassCenter.x, pz - grassCenter.z) < 4) return;
+  if (grassCenter && Math.hypot(px - grassCenter.x, pz - grassCenter.z) < 5) return;
   grassCenter = { x: px, z: pz };
   const arr = grass.instanceMatrix.array, ci = Math.round(px / GSP), cj = Math.round(pz / GSP);
   let n = 0;
@@ -635,7 +642,15 @@ function loadCharacter(url, group, rig, names, tint) {
   gltfLoader.loadAsync(url).then((g) => {
     const model = g.scene;
     const meshes = [];
-    model.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; if (o.material) { o.material.roughness = 0.92; o.material.envMapIntensity = 0.6; if (tint) o.material.color.copy(tint); } meshes.push(o); } });
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
+      const old = o.material;
+      if (old.map) { old.map.anisotropy = 8; old.map.colorSpace = THREE.SRGBColorSpace; }
+      o.material = new THREE.MeshPhysicalMaterial({ map: old.map, color: tint || 0xffffff, roughness: 0.88, metalness: 0, envMapIntensity: 0.6,
+        sheen: 1, sheenRoughness: 0.55, sheenColor: new THREE.Color(1.0, 0.94, 0.84).multiplyScalar(0.55) });
+      old.dispose(); meshes.push(o);
+    });
     rig.body.add(model);
     // 털: 같은 뼈대를 공유하는 껍질을 겹쳐 그린다 (셸 퍼)
     for (const o of meshes) for (let i = 1; i <= FUR_SHELLS; i++) {
@@ -716,7 +731,7 @@ function updateBear(dt, feetY, t) {
 
 // ---------- 소리: 웹오디오로 합성 (외부 음원 없음). 배경음악·바람·새소리·발소리·점프·꿀단지·종 ----------
 const sfx = (() => {
-  let ac = null, master = null, musicGain = null, delay = null, muted = false, started = false;
+  let ac = null, master = null, fx = null, noiseBuf = null, musicGain = null, delay = null, muted = false, started = false;
   let step = 0, nextT = 0, windGain = null;
   const BPM = 84, STEP = 60 / BPM / 2;
   // 펜타토닉 멜로디(동화풍): 음계 인덱스와 길이
@@ -729,19 +744,21 @@ const sfx = (() => {
   function env(g, t, a, d, s, r, peak = 1) { g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(peak, t + a); g.gain.linearRampToValueAtTime(peak * s, t + a + d); g.gain.setTargetAtTime(0, t + a + d, r); }
   function tone(freq, t, dur, type = 'triangle', vol = 0.25, dest = null, detune = 0) {
     const o = ac.createOscillator(), g = ac.createGain(); o.type = type; o.frequency.value = freq; o.detune.value = detune;
-    env(g, t, 0.02, dur * 0.4, 0.5, dur * 0.3, vol); o.connect(g).connect(dest || master); o.start(t); o.stop(t + dur + 1); return o;
+    env(g, t, 0.02, dur * 0.4, 0.5, dur * 0.3, vol); o.connect(g).connect(dest || fx); o.start(t); o.stop(t + dur + 1); return o;
   }
   function noise(t, dur, cutoff, vol, q = 0.7) {
-    const n = ac.createBufferSource(), buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate), d = buf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
-    n.buffer = buf; const fl = ac.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = cutoff; fl.Q.value = q;
-    const g = ac.createGain(); env(g, t, 0.005, dur * 0.5, 0.3, dur * 0.2, vol); n.connect(fl).connect(g).connect(master); n.start(t); n.stop(t + dur + 0.5);
+    const n = ac.createBufferSource(); n.buffer = noiseBuf; const fl = ac.createBiquadFilter(); fl.type = 'lowpass'; fl.frequency.value = cutoff; fl.Q.value = q;
+    const g = ac.createGain(); env(g, t, 0.005, dur * 0.5, 0.3, dur * 0.2, vol); n.connect(fl).connect(g).connect(fx); n.start(t, Math.random() * 1.2); n.stop(t + dur + 0.5);
   }
   function start() {
     if (started) return; started = true;
     ac = new (window.AudioContext || window.webkitAudioContext)();
-    master = ac.createGain(); master.gain.value = muted ? 0 : 0.8; master.connect(ac.destination);
-    musicGain = ac.createGain(); musicGain.gain.value = 0.16;
+    const comp = ac.createDynamicsCompressor(); comp.threshold.value = -20; comp.knee.value = 12; comp.ratio.value = 4; comp.attack.value = 0.005; comp.release.value = 0.2;
+    const makeup = ac.createGain(); makeup.gain.value = 1.6;
+    master = ac.createGain(); master.gain.value = muted ? 0 : 1; master.connect(comp).connect(makeup).connect(ac.destination);
+    fx = ac.createGain(); fx.gain.value = 1.9; fx.connect(master);
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate); { const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+    musicGain = ac.createGain(); musicGain.gain.value = 0.34;
     delay = ac.createDelay(2.0); delay.delayTime.value = STEP * 3; const fb = ac.createGain(); fb.gain.value = 0.32; const wet = ac.createGain(); wet.gain.value = 0.35;
     musicGain.connect(master); musicGain.connect(delay); delay.connect(fb).connect(delay); delay.connect(wet).connect(master);
     // 바람: 계속 흐르는 저음 노이즈
@@ -768,21 +785,21 @@ const sfx = (() => {
     schedule();
     windGain.gain.setTargetAtTime(0.03 + 0.05 * (player.fly ? 1 : 0.4), ac.currentTime, 0.5);
     // 발소리
-    if (moving && onGround) { stepT -= dt; if (stepT <= 0) { stepT = running ? 0.27 : 0.42; noise(ac.currentTime, 0.09, 900 + Math.random() * 300, 0.12); } } else stepT = 0.05;
+    if (moving && onGround) { stepT -= dt; if (stepT <= 0) { stepT = running ? 0.27 : 0.42; noise(ac.currentTime, 0.09, 900 + Math.random() * 300, 0.2); } } else stepT = 0.05;
     // 낮엔 새소리
     birdT -= dt; if (birdT <= 0 && day > 0.4) { birdT = 2 + Math.random() * 6; const t0 = ac.currentTime, n = 2 + Math.floor(Math.random() * 3), fb = 1800 + Math.random() * 1500;
       for (let i = 0; i < n; i++) { const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(fb, t0 + i * 0.13); o.frequency.exponentialRampToValueAtTime(fb * 1.6, t0 + i * 0.13 + 0.06); o.frequency.exponentialRampToValueAtTime(fb * 0.9, t0 + i * 0.13 + 0.11);
-        env(g, t0 + i * 0.13, 0.01, 0.06, 0.3, 0.05, 0.05); o.connect(g).connect(master); o.start(t0 + i * 0.13); o.stop(t0 + i * 0.13 + 0.3); } }
+        env(g, t0 + i * 0.13, 0.01, 0.06, 0.3, 0.05, 0.08); o.connect(g).connect(fx); o.start(t0 + i * 0.13); o.stop(t0 + i * 0.13 + 0.3); } }
     // 교회 종
     bellT -= dt; if (bellT <= 0) { bellT = 70 + Math.random() * 40; bell(); }
   }
   function bell() { const t0 = ac.currentTime; for (let k = 0; k < 3; k++) for (const [r, v] of [[1, 0.12], [2.0, 0.06], [2.98, 0.04], [4.2, 0.02]]) tone(330 * r, t0 + k * 1.6, 2.6, 'sine', v); }
   return {
     start, update, bell,
-    toggleMute() { muted = !muted; if (master) master.gain.setTargetAtTime(muted ? 0 : 0.8, ac.currentTime, 0.05); document.getElementById('mute').textContent = muted ? '소리: 꺼짐 (M)' : '소리: 켜짐 (M)'; },
-    jump() { if (!ac) return; const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(260, ac.currentTime); o.frequency.exponentialRampToValueAtTime(620, ac.currentTime + 0.14); env(g, ac.currentTime, 0.01, 0.1, 0.2, 0.08, 0.14); o.connect(g).connect(master); o.start(); o.stop(ac.currentTime + 0.5); },
+    toggleMute() { muted = !muted; if (master) master.gain.setTargetAtTime(muted ? 0 : 1, ac.currentTime, 0.05); document.getElementById('mute').textContent = muted ? '소리: 꺼짐 (M)' : '소리: 켜짐 (M)'; },
+    jump() { if (!ac) return; const o = ac.createOscillator(), g = ac.createGain(); o.type = 'sine'; o.frequency.setValueAtTime(260, ac.currentTime); o.frequency.exponentialRampToValueAtTime(620, ac.currentTime + 0.14); env(g, ac.currentTime, 0.01, 0.1, 0.2, 0.08, 0.2); o.connect(g).connect(fx); o.start(); o.stop(ac.currentTime + 0.5); },
     land() { if (ac) noise(ac.currentTime, 0.12, 500, 0.16); },
-    pickup() { if (!ac) return; const t0 = ac.currentTime; tone(f(12), t0, 0.25, 'triangle', 0.2); tone(f(19), t0 + 0.09, 0.35, 'triangle', 0.2); tone(f(24), t0 + 0.18, 0.5, 'sine', 0.15); },
+    pickup() { if (!ac) return; const t0 = ac.currentTime; tone(f(12), t0, 0.25, 'triangle', 0.3); tone(f(19), t0 + 0.09, 0.35, 'triangle', 0.3); tone(f(24), t0 + 0.18, 0.5, 'sine', 0.25); },
     fanfare() { if (!ac) return; const t0 = ac.currentTime; [0, 4, 7, 12, 7, 12, 16, 19].forEach((n, i) => tone(f(n) * 2, t0 + i * 0.13, 0.35, 'triangle', 0.18)); bell(); },
   };
 })();
@@ -1250,7 +1267,7 @@ function frame(now) {
   timeU.value += dt;
   if (running) updatePlayer(dt);
   const p = player.pos;
-  updateChunks(p.x, p.z, 2);
+  updateChunks(p.x, p.z, 1);
   updateGrass(p.x, p.z);
   const feetY = p.y - EYE;
   updateBear(dt, feetY, timeU.value);
